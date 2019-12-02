@@ -7,6 +7,7 @@
 (require racket/match
          racket/port
          racket/string
+         racket/vector
          threading)
 
 (module+ test
@@ -65,4 +66,21 @@
   (run-intcode! pgm)
   (vector-ref pgm 0))
 
-(module* part-two #f)
+
+(define (find-inputs pgm)
+  (define (run-once noun verb)
+    (define trial-pgm (vector-copy pgm))
+    (vector-set! trial-pgm 1 noun)
+    (vector-set! trial-pgm 2 verb)
+    (run-intcode! trial-pgm)
+    (vector-ref trial-pgm 0))
+  (let/ec return
+    (for* ([n 100] [v 100])
+      (when (= 19690720 (run-once n v))
+        (return n v)))))
+
+(module* part-two #f
+  (define-values (noun verb)
+    (find-inputs
+     (call-with-input-file "inputs/02.txt" load-program)))
+  (+ (* 100 noun) verb))
