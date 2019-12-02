@@ -2,6 +2,8 @@
 
 #|
 
+https://adventofcode.com/2019/day/2
+
 |#
 
 (require racket/match
@@ -15,6 +17,7 @@
            racket/vector
            rackunit))
 
+;; load-program : Input-Port -> (Vectorof Nonnegative-Integer)
 (define (load-program an-input-port)
   (~>> (port->string an-input-port)
        (string-split _ #rx",")
@@ -25,21 +28,36 @@
   (check-equal? (call-with-input-string "1,2,3,4,5,6" load-program)
                 (vector 1 2 3 4 5 6)))
 
+;; run-intcode! : (Vectorof Nonnegative-Integer)
 (define (run-intcode! pgm)
-  (define (pset! i v)
-    (vector-set! pgm (vector-ref pgm i) v))
-  (define pref
-    (lambda~>> (vector-ref pgm)
-               (vector-ref pgm)))
-  (define (do-operation ip op)
-    (pset! (+ ip 3)
-           (op (pref (+ ip 1))
-               (pref (+ ip 2))))
-    (run (+ 4 ip)))
+  ;; memset! : Addr Nonnegative-Integer
+  ;; looks up Addr in i and sets that Addr to v
+  (define (memset! i v)
+    (vector-set! pgm i v))
+
+  ;; memref : Addr -> Nonnegative-Integer
+  ;; looks up Addr in memory and returns value at that Addr
+  (define memref
+    (lambda~>> (vector-ref pgm)))
+
+  ;; mem-deref : Addr -> Nonnegative-Integer
+  ;; look up the Value in the cell pointed to by Addr
+  (define mem-deref
+    (lambda~> memref memref))
+
+  ;; do-operation! : Addr (Int Int -> Int)
+  (define (do-operation! ip op incr)
+    (memset! (memref (+ ip 3))
+             (op (mem-deref (+ ip 1))
+                 (mem-deref (+ ip 2))))
+    (run (+ incr ip)))
+
+  ;; run : Addr
+  ;; runs until ip points to a cell containing 99
   (define (run ip)
     (match (vector-ref pgm ip)
-      [1  (do-operation ip +)]
-      [2  (do-operation ip *)]
+      [1  (do-operation! ip + 4)]
+      [2  (do-operation! ip * 4)]
       [99 (void)]))
   (run 0))
 
