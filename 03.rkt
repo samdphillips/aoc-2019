@@ -6,6 +6,8 @@
 
 #|
 
+https://adventofcode.com/2019/day/3
+
 |#
 
 (module+ test
@@ -29,7 +31,7 @@
        (loop new (sub1 count) (cons new acc))]))
   (loop cur count null))
 
-;; plot-path : (Listof PathStep) -> (Setof Posn)
+;; plot : (Listof PathStep) -> (Setof Posn)
 (define (plot path)
   (for/fold ([cur (posn 0 0)]
              [cells (set)]
@@ -103,10 +105,7 @@
 
   (check-equal? (solve-part-one "R75,D30,R83,U83,L12,D49,R71,U7,L72"
                                 "U62,R66,U55,R34,D71,R55,D58,R83")
-                159)
-
-
-  )
+                159))
 
 (module* part-one #f
   (call-with-input-file "inputs/03.txt"
@@ -114,5 +113,51 @@
       (solve-part-one (read-line input)
                       (read-line input)))))
 
+;; plot : (Listof PathStep) -> (Setof Posn)
+(define (plot/count path ht)
+  (for/fold ([cur (posn 0 0)]
+             [path-dist 0]
+             [cells (set)]
+             #:result cells)
+            ([a-step (in-list path)])
+    (define d
+      (match a-step
+        [(step 'U _) (posn 0 1)]
+        [(step 'D _) (posn 0 -1)]
+        [(step 'L _) (posn -1 0)]
+        [(step 'R _) (posn 1 0)]))
+    (define dist (step-distance a-step))
+    (define new-cells (plot1 cur d dist))
+    (for ([cell (in-list new-cells)]
+          [i (in-range (+ path-dist dist) path-dist -1)])
+      (hash-set! ht cell i))
+    (values (car new-cells)
+            (+ path-dist dist)
+            (set-union
+             (list->set new-cells)
+             cells))))
 
-(module* part-two #f)
+(define (solve-part-two path1 path2)
+  (define counts1 (make-hash))
+  (define counts2 (make-hash))
+  (define crossings
+    (path-crossings
+     (plot/count (parse-path path1) counts1)
+     (plot/count (parse-path path2) counts2)))
+  (for/fold ([closest #f]) ([cell (in-set crossings)])
+    (define dist (+ (hash-ref counts1 cell) (hash-ref counts2 cell)))
+    (cond
+      [(not closest) dist]
+      [(< dist closest) dist]
+      [else closest])))
+
+(module+ test
+  (check-equal? (solve-part-two "R8,U5,L5,D3"
+                                "U7,R6,D4,L4")
+                30))
+
+(module* part-two #f
+  (call-with-input-file "inputs/03.txt"
+    (lambda (input)
+      (solve-part-two (read-line input)
+                      (read-line input)))))
