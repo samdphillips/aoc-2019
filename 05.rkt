@@ -60,49 +60,92 @@
   (set-box! in-dev (stream-rest s))
   v)
 
-(define (mode-ref mode pgm ptr)
+(define (mode-ref mode mem ptr)
   (match mode
-    ['imm (memref pgm ptr)]
-    ['pos (memderef pgm ptr)]))
+    ['imm (memref mem ptr)]
+    ['pos (memderef mem ptr)]))
 
 (struct $add (a b)
+  #:transparent
   #:property prop:procedure
-  (lambda (inst in-dev out-dev mem ip)
+  (lambda ($inst in-dev out-dev mem ip)
     (memset! mem
              (memref mem (+ 3 ip))
-             (+ (mode-ref ($add-a inst) mem (+ 1 ip))
-                (mode-ref ($add-b inst) mem (+ 2 ip))))
+             (+ (mode-ref ($add-a $inst) mem (+ 1 ip))
+                (mode-ref ($add-b $inst) mem (+ 2 ip))))
     (+ 4 ip)))
 
 (struct $mul (a b)
+  #:transparent
   #:property prop:procedure
-  (lambda (inst in-dev out-dev mem ip)
+  (lambda ($inst in-dev out-dev mem ip)
     (memset! mem
              (memref mem (+ 3 ip))
-             (* (mode-ref ($mul-a inst) mem (+ 1 ip))
-                (mode-ref ($mul-b inst) mem (+ 2 ip))))
+             (* (mode-ref ($mul-a $inst) mem (+ 1 ip))
+                (mode-ref ($mul-b $inst) mem (+ 2 ip))))
     (+ 4 ip)))
 
 (struct $in ()
+  #:transparent
   #:property prop:procedure
-  (lambda (inst in-dev out-dev mem ip)
+  (lambda ($inst in-dev out-dev mem ip)
     (memset! mem (memref mem (+ 1 ip)) (read-in! in-dev))
     (+ 2 ip)))
 
 (define display-output (make-parameter #t))
 
 (struct $out (mode)
+  #:transparent
   #:property prop:procedure
-  (lambda (inst in-dev out-dev mem ip)
-    (define val (mode-ref ($out-mode inst) mem (+ 1 ip)))
+  (lambda ($inst in-dev out-dev mem ip)
+    (define val (mode-ref ($out-mode $inst) mem (+ 1 ip)))
     (when (display-output)
       (display (~a  val " ")))
     (set-box! out-dev (cons val (unbox out-dev)))
     (+ 2 ip)))
 
-(define instruction-num-decode-args (vector #f 2 2 0 1))
+(struct $jmpt (test addr)
+  #:transparent
+  #:property prop:procedure
+  (lambda ($inst in-dev out-dev mem ip)
+    (if (zero? (mode-ref ($jmpt-test $inst) mem (+ 1 ip)))
+        (+ 3 ip)
+        (mode-ref ($jmpt-addr $inst) mem (+ 2 ip)))))
+
+(struct $jmpf (test addr)
+  #:transparent
+  #:property prop:procedure
+  (lambda ($inst in-dev out-dev mem ip)
+    (if (zero? (mode-ref ($jmpf-test $inst) mem (+ 1 ip)))
+        (mode-ref ($jmpf-addr $inst) mem (+ 2 ip))
+        (+ 3 ip))))
+
+(struct $lt (a b)
+  #:transparent
+  #:property prop:procedure
+  (lambda ($inst in-dev out-dev mem ip)
+    (define v1 (mode-ref ($lt-a $inst) mem (+ 1 ip)))
+    (define v2 (mode-ref ($lt-b $inst) mem (+ 2 ip)))
+    (memset! mem
+             (memref mem (+ 3 ip))
+             (if (< v1 v2) 1 0))
+    (+ 4 ip)))
+
+(struct $eq (a b)
+  #:transparent
+  #:property prop:procedure
+  (lambda ($inst in-dev out-dev mem ip)
+    (define v1 (mode-ref ($eq-a $inst) mem (+ 1 ip)))
+    (define v2 (mode-ref ($eq-b $inst) mem (+ 2 ip)))
+    (memset! mem
+             (memref mem (+ 3 ip))
+             (if (= v1 v2) 1 0))
+    (+ 4 ip)))
+
+
+(define instruction-num-decode-args (vector #f 2 2 0 1 2 2 2 2))
 (define instruction-makers
-  (vector #f $add $mul $in $out))
+  (vector #f $add $mul $in $out $jmpt $jmpf $lt $eq))
 
 ;; decode-instruction : Nonnegative-Integer -> $instruction
 (define (decode-instruction rator+modes)
@@ -164,9 +207,10 @@ run-intcode! : Memory
         (~a 'mem.literal)
         (define pmem (vector-copy mem.expr))
         (define out-dev (box null))
-        (run-intcode! pmem
-                      #:inputs {~? inputs null}
-                      #:out out-dev)
+        (parameterize ([display-output #f])
+          (run-intcode! pmem
+                        #:inputs {~? inputs null}
+                        #:out out-dev))
         (check-intcode-assertion pmem out-dev assertions) ...)])
 
   (define-syntax-parser check-intcode-assertion
@@ -195,4 +239,66 @@ run-intcode! : Memory
   (run-intcode! mem #:inputs (list 1)))
 
 
-(module* part-two #f)
+(module+ test
+  ;; $eq
+  (check-intcode #:mem "3,9,8,9,10,9,4,9,99,-1,8"
+                 #:inputs '(8)
+                 [#:out 1])
+  (check-intcode #:mem "3,9,8,9,10,9,4,9,99,-1,8"
+                 #:inputs '(7)
+                 [#:out 0])
+  (check-intcode #:mem "3,3,1108,-1,8,3,4,3,99"
+                 #:inputs '(8)
+                 [#:out 1])
+  (check-intcode #:mem "3,3,1108,-1,8,3,4,3,99"
+                 #:inputs '(7)
+                 [#:out 0])
+
+  ;; $lt
+  (check-intcode #:mem "3,9,7,9,10,9,4,9,99,-1,8"
+                 #:inputs '(8)
+                 [#:out 0])
+  (check-intcode #:mem "3,9,7,9,10,9,4,9,99,-1,8"
+                 #:inputs '(7)
+                 [#:out 1])
+  (check-intcode #:mem "3,3,1107,-1,8,3,4,3,99"
+                 #:inputs '(8)
+                 [#:out 0])
+  (check-intcode #:mem "3,3,1107,-1,8,3,4,3,99"
+                 #:inputs '(7)
+                 [#:out 1])
+
+  ;; $jmp*
+  (check-intcode #:mem "3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9"
+                 #:inputs '(0)
+                 [#:out 0])
+  (check-intcode #:mem "3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9"
+                 #:inputs '(42)
+                 [#:out 1])
+  (check-intcode #:mem "3,3,1105,-1,9,1101,0,0,12,4,12,99,1"
+                 #:inputs '(0)
+                 [#:out 0])
+  (check-intcode #:mem "3,3,1105,-1,9,1101,0,0,12,4,12,99,1"
+                 #:inputs '(42)
+                 [#:out 1])
+
+  (let ([mem (call-with-input-string
+              (string-append
+               "3,21,1008,21,8,20,1005,20,22,107,8,21,20,"
+               "1006,20,31,1106,0,36,98,0,0,1002,21,125,20,"
+               "4,20,1105,1,46,104,999,1105,1,46,1101,1000,"
+               "1,20,4,20,1105,1,46,98,99")
+              load-memory)])
+    (check-intcode #:mem mem
+                   #:inputs '(4)
+                   [#:out 999])
+    (check-intcode #:mem mem
+                   #:inputs '(8)
+                   [#:out 1000])
+    (check-intcode #:mem mem
+                   #:inputs '(42)
+                   [#:out 1001])))
+
+(module* part-two #f
+  (define mem (call-with-input-file "inputs/05.txt" load-memory))
+  (run-intcode! mem #:inputs (list 5)))
