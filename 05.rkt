@@ -89,7 +89,7 @@
 (struct $out (mode)
   #:property prop:procedure
   (lambda (inst in-dev mem ip)
-    (display (~a (mode-ref $out-mode mem (+ 1 ip)) " "))
+    (display (~a (mode-ref ($out-mode inst) mem (+ 1 ip)) " "))
     (+ 2 ip)))
 
 (define instruction-num-decode-args (vector #f 2 2 0 1))
@@ -156,7 +156,9 @@ run-intcode! : Memory
 
   (check-intcode "1002,5,3,5,99,33" 5 99))
 
+(module* part-one #f
+  (define mem (call-with-input-file "inputs/05.txt" load-program))
+  (run-intcode! mem #:inputs (list 1)))
 
-(module* part-one #f)
 
 (module* part-two #f)
