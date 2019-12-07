@@ -4,18 +4,24 @@
 
 |#
 
-(require racket/match
+(require racket/format
+         racket/match
          racket/port
+         racket/stream
          racket/string
          racket/vector
          threading)
 
 (module+ test
-  (require racket/format
+  (require (for-syntax racket/base)
+           racket/format
            racket/vector
-           rackunit))
+           rackunit
+           syntax/parse/define))
 
-;; load-program : Input-Port -> (Vectorof Nonnegative-Integer)
+;; Program = Memory = (Vectorof Integer)
+
+;; load-program : Input-Port -> Program
 (define (load-program an-input-port)
   (~>> (port->string an-input-port)
        (string-split _ #rx",")
@@ -26,54 +32,131 @@
   (check-equal? (call-with-input-string "1,2,3,4,5,6" load-program)
                 (vector 1 2 3 4 5 6)))
 
-;; run-intcode! : (Vectorof Nonnegative-Integer)
-(define (run-intcode! pgm)
-  ;; memset! : Addr Nonnegative-Integer
-  ;; looks up Addr in i and sets that Addr to v
-  (define (memset! i v)
-    (vector-set! pgm i v))
 
-  ;; memref : Addr -> Nonnegative-Integer
-  ;; looks up Addr in memory and returns value at that Addr
-  (define memref
-    (lambda~>> (vector-ref pgm)))
+;; memset! : Memory Addr Nonnegative-Integer -> Void
+;; looks up Addr in i and sets that Addr to v
+(define memset! vector-set!)
 
-  ;; mem-deref : Addr -> Nonnegative-Integer
-  ;; look up the Value in the cell pointed to by Addr
-  (define mem-deref
-    (lambda~> memref memref))
+;; memref : Memory Addr -> Nonnegative-Integer
+;; looks up Addr in memory and returns value at that Addr
+(define memref vector-ref)
 
-  ;; do-operation! : Addr (Int Int -> Int)
-  (define (do-operation! ip op incr)
-    (memset! (memref (+ ip 3))
-             (op (mem-deref (+ ip 1))
-                 (mem-deref (+ ip 2))))
-    (run (+ incr ip)))
+;; memderef : Memory Addr -> Nonnegative-Integer
+;; look up the Value in the cell pointed to by Addr
+(define (memderef mem ptr)
+  (~>> (memref mem ptr)
+       (memref mem)))
+
+
+;; Input-Device = (Box (Streamof Integer))
+;; read-in! : Input-Device -> Integer
+;; side-effect: updates box
+(define (read-in! in-dev)
+  (define s (unbox in-dev))
+  (define v (stream-first s))
+  (set-box! in-dev (stream-rest s))
+  v)
+
+(define (mode-ref mode pgm ptr)
+  (match mode
+    ['imm (memref pgm ptr)]
+    ['pos (memderef pgm ptr)]))
+
+(struct $add (a b)
+  #:property prop:procedure
+  (lambda (inst in-dev mem ip)
+    (memset! mem
+             (memref mem (+ 3 ip))
+             (+ (mode-ref ($add-a inst) mem (+ 1 ip))
+                (mode-ref ($add-b inst) mem (+ 2 ip))))
+    (+ 4 ip)))
+
+(struct $mul (a b)
+  #:property prop:procedure
+  (lambda (inst in-dev mem ip)
+    (memset! mem
+             (memref mem (+ 3 ip))
+             (* (mode-ref ($mul-a inst) mem (+ 1 ip))
+                (mode-ref ($mul-b inst) mem (+ 2 ip))))
+    (+ 4 ip)))
+
+(struct $in ()
+  #:property prop:procedure
+  (lambda (inst in-dev mem ip)
+    (memset! mem (memref mem (+ 1 ip)) (read-in! in-dev))
+    (+ 2 ip)))
+
+(struct $out (mode)
+  #:property prop:procedure
+  (lambda (inst in-dev mem ip)
+    (display (~a (mode-ref $out-mode mem (+ 1 ip)) " "))
+    (+ 2 ip)))
+
+(define instruction-num-decode-args (vector #f 2 2 0 1))
+(define instruction-makers
+  (vector #f $add $mul $in $out))
+
+;; decode-instruction : Nonnegative-Integer -> $instruction
+(define (decode-instruction rator+modes)
+  (define-values (mode-nums rator) (quotient/remainder rator+modes 100))
+  (define num-args (vector-ref instruction-num-decode-args rator))
+  (define modes
+    (for/fold ([modes null]
+               [mode-nums mode-nums]
+               #:result (reverse modes))
+              ([i (in-range num-args)])
+      (let-values ([(mode-nums mode) (quotient/remainder mode-nums 10)])
+        (values (cons (if (zero? mode) 'pos 'imm)
+                      modes)
+                mode-nums))))
+  (apply (vector-ref instruction-makers rator) modes))
+
+
+#|
+run-intcode! : Memory
+               #:start [Addr]
+               #:inputs [(Streamof Integer)]
+               -> Void
+|#
+(define (run-intcode! mem #:start [ip 0] #:inputs [inputs null])
+  (define in-dev (box inputs))
+
+  ;; do-operation! : Nonnegative-Integer Addr -> Void
+  (define (do-operation! opcode ip)
+    (define $inst (decode-instruction opcode))
+    (define new-ip
+      ($inst in-dev mem ip))
+    (run new-ip))
 
   ;; run : Addr
   ;; runs until ip points to a cell containing 99
   (define (run ip)
-    (match (vector-ref pgm ip)
-      [1  (do-operation! ip + 4)]
-      [2  (do-operation! ip * 4)]
-      [99 (void)]))
-  (run 0))
+    (match (memref mem ip)
+      [99 (void)]
+      [opcode (do-operation! opcode ip)]))
+  (run ip))
 
 (module+ test
-  (define-syntax check-intcode
-    (syntax-rules ()
-      [(_ pgm idx val)
-       (test-case
-        (~a 'pgm)
-        (define p (vector-copy pgm))
-        (run-intcode! p)
-        (check-equal? (vector-ref p idx) val))]))
+  (define-syntax-parser check-intcode
+    [(_ pgm:str idx val)
+     #'(check-intcode
+        (call-with-input-string pgm load-program) idx val)]
+    [(_ mem idx val)
+     #'(test-case
+        (~a 'mem)
+        (define pmem (vector-copy mem))
+        (run-intcode! pmem)
+        (check-equal? (memref pmem idx) val))])
 
   (check-intcode #(1 0 0 0 99) 0 2)
   (check-intcode #(2 3 0 3 99) 3 6)
   (check-intcode #(2 4 4 5 99 0) 5 9801)
   (check-intcode #(1 1 1 4 99 5 6 0 99) 0 30)
-  (check-intcode #(1 1 1 4 99 5 6 0 99) 4 2))
+  (check-intcode #(1 1 1 4 99 5 6 0 99) 4 2)
+
+  (check-intcode "1002,5,3,5,99,33" 5 99))
+
+
 (module* part-one #f)
 
 (module* part-two #f)
