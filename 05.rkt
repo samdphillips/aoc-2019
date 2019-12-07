@@ -21,15 +21,15 @@
 
 ;; Program = Memory = (Vectorof Integer)
 
-;; load-program : Input-Port -> Program
-(define (load-program an-input-port)
+;; load-memory : Input-Port -> Memory
+(define (load-memory an-input-port)
   (~>> (port->string an-input-port)
        (string-split _ #rx",")
        (map string->number)
        (apply vector)))
 
 (module+ test
-  (check-equal? (call-with-input-string "1,2,3,4,5,6" load-program)
+  (check-equal? (call-with-input-string "1,2,3,4,5,6" load-memory)
                 (vector 1 2 3 4 5 6)))
 
 
@@ -137,27 +137,43 @@ run-intcode! : Memory
   (run ip))
 
 (module+ test
+  (begin-for-syntax
+    (define-syntax-class intcode-memory
+      [pattern literal:str
+               #:attr expr
+               #'(call-with-input-string literal load-memory)]
+      [pattern literal
+               #:attr expr #'literal]))
+
   (define-syntax-parser check-intcode
-    [(_ pgm:str idx val)
-     #'(check-intcode
-        (call-with-input-string pgm load-program) idx val)]
-    [(_ mem idx val)
+    [(_ #:mem mem:intcode-memory assertions ...)
      #'(test-case
-        (~a 'mem)
-        (define pmem (vector-copy mem))
+        (~a 'mem.literal)
+        (define pmem (vector-copy mem.expr))
         (run-intcode! pmem)
-        (check-equal? (memref pmem idx) val))])
+        (check-intcode-assertion pmem assertions) ...)])
 
-  (check-intcode #(1 0 0 0 99) 0 2)
-  (check-intcode #(2 3 0 3 99) 3 6)
-  (check-intcode #(2 4 4 5 99 0) 5 9801)
-  (check-intcode #(1 1 1 4 99 5 6 0 99) 0 30)
-  (check-intcode #(1 1 1 4 99 5 6 0 99) 4 2)
+  (define-syntax-parser check-intcode-assertion
+    [(_ mem [#:mem= idx val])
+     #'(check-equal? (memref mem idx) val)])
 
-  (check-intcode "1002,5,3,5,99,33" 5 99))
+  (check-intcode #:mem #(1 0 0 0 99)
+                 [#:mem= 0 2])
+  (check-intcode #:mem #(2 3 0 3 99)
+                 [#:mem= 3 6])
+  (check-intcode #:mem #(2 4 4 5 99 0)
+                 [#:mem= 5 9801])
+  (check-intcode #:mem #(1 1 1 4 99 5 6 0 99)
+                 [#:mem= 0 30])
+  (check-intcode #:mem #(1 1 1 4 99 5 6 0 99)
+                 [#:mem= 4 2])
+
+  ;; modes
+  (check-intcode #:mem "1002,5,3,5,99,33"
+                 [#:mem= 5 99]))
 
 (module* part-one #f
-  (define mem (call-with-input-file "inputs/05.txt" load-program))
+  (define mem (call-with-input-file "inputs/05.txt" load-memory))
   (run-intcode! mem #:inputs (list 1)))
 
 
