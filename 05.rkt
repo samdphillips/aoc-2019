@@ -25,11 +25,14 @@
 (define (load-memory an-input-port)
   (~>> (port->string an-input-port)
        (string-split _ #rx",")
+       (map (lambda~> string-trim))
        (map string->number)
        (apply vector)))
 
 (module+ test
   (check-equal? (call-with-input-string "1,2,3,4,5,6" load-memory)
+                (vector 1 2 3 4 5 6))
+  (check-equal? (call-with-input-string "1,2,3,4,5,6\r" load-memory)
                 (vector 1 2 3 4 5 6)))
 
 
