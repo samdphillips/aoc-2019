@@ -64,7 +64,7 @@
 
 (struct $add (a b)
   #:property prop:procedure
-  (lambda (inst in-dev mem ip)
+  (lambda (inst in-dev out-dev mem ip)
     (memset! mem
              (memref mem (+ 3 ip))
              (+ (mode-ref ($add-a inst) mem (+ 1 ip))
@@ -73,7 +73,7 @@
 
 (struct $mul (a b)
   #:property prop:procedure
-  (lambda (inst in-dev mem ip)
+  (lambda (inst in-dev out-dev mem ip)
     (memset! mem
              (memref mem (+ 3 ip))
              (* (mode-ref ($mul-a inst) mem (+ 1 ip))
@@ -82,14 +82,19 @@
 
 (struct $in ()
   #:property prop:procedure
-  (lambda (inst in-dev mem ip)
+  (lambda (inst in-dev out-dev mem ip)
     (memset! mem (memref mem (+ 1 ip)) (read-in! in-dev))
     (+ 2 ip)))
 
+(define display-output (make-parameter #t))
+
 (struct $out (mode)
   #:property prop:procedure
-  (lambda (inst in-dev mem ip)
-    (display (~a (mode-ref ($out-mode inst) mem (+ 1 ip)) " "))
+  (lambda (inst in-dev out-dev mem ip)
+    (define val (mode-ref ($out-mode inst) mem (+ 1 ip)))
+    (when (display-output)
+      (display (~a  val " ")))
+    (set-box! out-dev (cons val (unbox out-dev)))
     (+ 2 ip)))
 
 (define instruction-num-decode-args (vector #f 2 2 0 1))
@@ -118,14 +123,17 @@ run-intcode! : Memory
                #:inputs [(Streamof Integer)]
                -> Void
 |#
-(define (run-intcode! mem #:start [ip 0] #:inputs [inputs null])
+(define (run-intcode! mem
+                      #:start  [ip 0]
+                      #:inputs [inputs null]
+                      #:out    [out-dev (box null)])
   (define in-dev (box inputs))
 
   ;; do-operation! : Nonnegative-Integer Addr -> Void
   (define (do-operation! opcode ip)
     (define $inst (decode-instruction opcode))
     (define new-ip
-      ($inst in-dev mem ip))
+      ($inst in-dev out-dev mem ip))
     (run new-ip))
 
   ;; run : Addr
@@ -146,16 +154,23 @@ run-intcode! : Memory
                #:attr expr #'literal]))
 
   (define-syntax-parser check-intcode
-    [(_ #:mem mem:intcode-memory assertions ...)
+    [(_ #:mem mem:intcode-memory
+        {~optional {~seq #:inputs inputs}}
+        assertions ...)
      #'(test-case
         (~a 'mem.literal)
         (define pmem (vector-copy mem.expr))
-        (run-intcode! pmem)
-        (check-intcode-assertion pmem assertions) ...)])
+        (define out-dev (box null))
+        (run-intcode! pmem
+                      #:inputs {~? inputs null}
+                      #:out out-dev)
+        (check-intcode-assertion pmem out-dev assertions) ...)])
 
   (define-syntax-parser check-intcode-assertion
-    [(_ mem [#:mem= idx val])
-     #'(check-equal? (memref mem idx) val)])
+    [(_ mem out-dev [#:mem= idx val])
+     #'(check-equal? (memref mem idx) val)]
+    [(_ mem out-dev [#:out val])
+     #'(check-equal? (car (unbox out-dev)) val)])
 
   (check-intcode #:mem #(1 0 0 0 99)
                  [#:mem= 0 2])
