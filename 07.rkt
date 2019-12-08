@@ -2,12 +2,13 @@
 
 #|
 
+Behold!  A lot of imperative code and mutation!
+
 |#
 
 (require racket/format
          racket/match
          racket/port
-         racket/stream
          racket/string
          racket/vector
          threading)
@@ -21,6 +22,15 @@
 
 ;; Program = Memory = (Vectorof Integer)
 
+#|
+                   #    # ###### #    #  ####  #####  #   #
+                   ##  ## #      ##  ## #    # #    #  # #
+                   # ## # #####  # ## # #    # #    #   #
+                   #    # #      #    # #    # #####    #
+                   #    # #      #    # #    # #   #    #
+                   #    # ###### #    #  ####  #    #   #
+|#
+
 ;; load-memory : Input-Port -> Memory
 (define (load-memory an-input-port)
   (~>> (port->string an-input-port)
@@ -28,6 +38,13 @@
        (map (lambda~> string-trim))
        (map string->number)
        (apply vector)))
+
+(define (->memory a-value)
+  (match a-value
+    [(? vector?) a-value]
+    [(? string?)
+     (call-with-input-string a-value load-memory)]))
+
 
 (module+ test
   (check-equal? (call-with-input-string "1,2,3,4,5,6" load-memory)
@@ -50,6 +67,14 @@
   (~>> (memref mem ptr)
        (memref mem)))
 
+#|
+               #  ####         ####  #    # ###### #    # ######
+               # #    #       #    # #    # #      #    # #
+               # #    # ##### #    # #    # #####  #    # #####
+               # #    #       #  # # #    # #      #    # #
+               # #    #       #   #  #    # #      #    # #
+               #  ####         ### #  ####  ######  ####  ######
+|#
 (struct io-queue (fore aft)
   #:transparent
   #:mutable)
@@ -95,6 +120,19 @@
 (define (write-out! out-dev val)
   (io-queue-enqueue! out-dev val))
 
+#|
+
+
+ # #    #  ####  ##### #####  #    #  ####  ##### #  ####  #    #  ####
+ # ##   # #        #   #    # #    # #    #   #   # #    # ##   # #
+ # # #  #  ####    #   #    # #    # #        #   # #    # # #  #  ####
+ # #  # #      #   #   #####  #    # #        #   # #    # #  # #      #
+ # #   ## #    #   #   #   #  #    # #    #   #   # #    # #   ## #    #
+ # #    #  ####    #   #    #  ####   ####    #   #  ####  #    #  ####
+
+
+|#
+
 (define (mode-ref mode mem ptr)
   (match mode
     ['imm (memref mem ptr)]
@@ -103,79 +141,96 @@
 (struct $add (a b)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ _) a-machine)
     (memset! mem
              (memref mem (+ 3 ip))
              (+ (mode-ref ($add-a $inst) mem (+ 1 ip))
                 (mode-ref ($add-b $inst) mem (+ 2 ip))))
-    (+ 4 ip)))
+    (set-machine-ip! a-machine (+ 4 ip))))
 
 (struct $mul (a b)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ _) a-machine)
     (memset! mem
              (memref mem (+ 3 ip))
              (* (mode-ref ($mul-a $inst) mem (+ 1 ip))
                 (mode-ref ($mul-b $inst) mem (+ 2 ip))))
-    (+ 4 ip)))
+    (set-machine-ip! a-machine (+ 4 ip))))
 
 (struct $in ()
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
-    (memset! mem (memref mem (+ 1 ip)) (read-in! in-dev))
-    (+ 2 ip)))
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ in-dev _) a-machine)
+    (define val-in (read-in! in-dev))
+    (cond
+      [val-in
+       (memset! mem (memref mem (+ 1 ip)) val-in)
+       (set-machine-ip! a-machine (+ 2 ip))]
+      [else
+       (set-machine-state! a-machine 'wait)])))
 
 (define display-output (make-parameter #t))
 
 (struct $out (mode)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ out-dev) a-machine)
     (define val (mode-ref ($out-mode $inst) mem (+ 1 ip)))
     (when (display-output)
       (display (~a  val " ")))
     (write-out! out-dev val)
-    (+ 2 ip)))
+    (set-machine-ip! a-machine (+ 2 ip))))
 
 (struct $jmpt (test addr)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
-    (if (zero? (mode-ref ($jmpt-test $inst) mem (+ 1 ip)))
-        (+ 3 ip)
-        (mode-ref ($jmpt-addr $inst) mem (+ 2 ip)))))
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ _) a-machine)
+    (set-machine-ip!
+     a-machine
+     (if (zero? (mode-ref ($jmpt-test $inst) mem (+ 1 ip)))
+         (+ 3 ip)
+         (mode-ref ($jmpt-addr $inst) mem (+ 2 ip))))))
 
 (struct $jmpf (test addr)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
-    (if (zero? (mode-ref ($jmpf-test $inst) mem (+ 1 ip)))
-        (mode-ref ($jmpf-addr $inst) mem (+ 2 ip))
-        (+ 3 ip))))
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ _) a-machine)
+    (set-machine-ip!
+     a-machine
+     (if (zero? (mode-ref ($jmpf-test $inst) mem (+ 1 ip)))
+         (mode-ref ($jmpf-addr $inst) mem (+ 2 ip))
+         (+ 3 ip)))))
 
 (struct $lt (a b)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ _) a-machine)
     (define v1 (mode-ref ($lt-a $inst) mem (+ 1 ip)))
     (define v2 (mode-ref ($lt-b $inst) mem (+ 2 ip)))
     (memset! mem
              (memref mem (+ 3 ip))
              (if (< v1 v2) 1 0))
-    (+ 4 ip)))
+    (set-machine-ip! a-machine (+ 4 ip))))
 
 (struct $eq (a b)
   #:transparent
   #:property prop:procedure
-  (lambda ($inst in-dev out-dev mem ip)
+  (lambda ($inst a-machine)
+    (match-define (machine mem ip _ _ _) a-machine)
     (define v1 (mode-ref ($eq-a $inst) mem (+ 1 ip)))
     (define v2 (mode-ref ($eq-b $inst) mem (+ 2 ip)))
     (memset! mem
              (memref mem (+ 3 ip))
              (if (= v1 v2) 1 0))
-    (+ 4 ip)))
+    (set-machine-ip! a-machine (+ 4 ip))))
 
 
 (define instruction-num-decode-args (vector #f 2 2 0 1 2 2 2 2))
@@ -197,22 +252,49 @@
                 mode-nums))))
   (apply (vector-ref instruction-makers rator) modes))
 
+#|
+                  #    #   ##    ####  #    # # #    # ######
+                  ##  ##  #  #  #    # #    # # ##   # #
+                  # ## # #    # #      ###### # # #  # #####
+                  #    # ###### #      #    # # #  # # #
+                  #    # #    # #    # #    # # #   ## #
+                  #    # #    #  ####  #    # # #    # ######
+|#
+
 (struct machine
-  (memory [ip #:mutable] [halted? #:mutable] in-dev out-dev))
+  (memory
+   [ip    #:mutable]
+   [state #:mutable]
+   in-dev
+   out-dev))
+
+(define (machine-ready? a-machine)
+  (eq? (machine-state a-machine) 'ready))
+
+(define (machine-stopped? a-machine)
+  (eq? (machine-state a-machine) 'stop))
+
+(define (machine-waiting? a-machine)
+  (eq? (machine-state a-machine) 'wait))
 
 (define (step-intcode! a-machine)
-  (match-define (machine mem ip halted? in-dev out-dev) a-machine)
+  (match-define (machine mem ip _ _ _) a-machine)
 
   (define (do-operation! opcode)
-    (define $inst (decode-instruction opcode))
-    (define new-ip
-      ($inst in-dev out-dev mem ip))
-    (set-machine-ip! a-machine new-ip))
+    (define $inst  (decode-instruction opcode))
+    ($inst a-machine))
 
-  (unless halted?
+  (when (machine-ready? a-machine)
     (match (memref mem ip)
-      [99 (set-machine-halted?! a-machine #t)]
+      [99 (set-machine-state! a-machine 'stop)]
       [opcode (do-operation! opcode)])))
+
+;; machine-poll! : Machine -> Void
+;; when a machine is in wait state, check if there are any values in
+;; the in-dev and change the state to ready
+(define (machine-poll! a-machine)
+  (unless (io-queue-empty? (machine-in-dev a-machine))
+    (set-machine-state! a-machine 'ready)))
 
 (module+ test
   (test-case
@@ -220,57 +302,53 @@
    (define m
      (machine (vector 1101 1 1 3 99)
               0
-              #f
+              'ready
               (make-io-queue)
               (make-io-queue)))
    (step-intcode! m)
    (check-equal? (memref (machine-memory m) 3) 2)
    (step-intcode! m)
-   (check-true (machine-halted? m))))
+   (check-true (machine-stopped? m))))
+
+;; machine-run! : Machine -> Void
+(define (machine-run! a-machine)
+  (when (machine-ready? a-machine)
+    (step-intcode! a-machine)
+    (machine-run! a-machine)))
 
 
 #|
-run-intcode! : Memory
+setup-run-intcode! : Memory
                #:start [Addr]
                #:inputs [(Streamof Integer)]
                -> Void
+
+Make a machine from inputs and run it until it's not in the ready state.
 |#
-(define (run-intcode! mem
-                      #:start  [ip 0]
-                      #:input  [in-dev  (make-io-queue)]
-                      #:output [out-dev (make-io-queue)])
+(define (setup-run-intcode! mem
+                            #:start  [ip 0]
+                            #:input  [in-dev  (make-io-queue)]
+                            #:output [out-dev (make-io-queue)])
   (define a-machine
-    (machine mem ip #f in-dev out-dev))
-  (define (run)
-    (unless (machine-halted? a-machine)
-      (step-intcode! a-machine)
-      (run)))
-  (run))
+    (machine mem ip 'ready in-dev out-dev))
+  (machine-run! a-machine))
 
 (module+ test
-  (begin-for-syntax
-    (define-syntax-class intcode-memory
-      [pattern literal:str
-               #:attr expr
-               #'(call-with-input-string literal load-memory)]
-      [pattern literal
-               #:attr expr #'literal]))
-
   (define-syntax-parser check-intcode
     [(_ {~optional {~seq #:label label}}
-        #:mem mem:intcode-memory
+        #:mem mem:expr
         {~optional {~seq #:inputs inputs}}
         assertions ...)
      #'(test-case
-        (~a {~? label 'mem.literal})
-        (define pmem (vector-copy mem.expr))
+        (~a {~? label 'mem})
+        (define pmem (vector-copy (->memory mem)))
         (define in-dev  (make-io-queue))
         {~? (io-queue-enqueue-all! in-dev inputs)}
         (define out-dev (make-io-queue))
         (parameterize ([display-output #f])
-          (run-intcode! pmem
-                        #:input  in-dev
-                        #:output out-dev))
+          (setup-run-intcode! pmem
+                              #:input  in-dev
+                              #:output out-dev))
         (check-intcode-assertion pmem out-dev assertions) ...)])
 
   (define-syntax-parser check-intcode-assertion
@@ -373,7 +451,109 @@ run-intcode! : Memory
                    #:inputs '(5)
                    [#:out 6959377])))
 
+#|
 
-(module* part-one #f)
+            ##   #    # #####  #      # ###### # ###### #####   ####
+           #  #  ##  ## #    # #      # #      # #      #    # #
+          #    # # ## # #    # #      # #####  # #####  #    #  ####
+          ###### #    # #####  #      # #      # #      #####       #
+          #    # #    # #      #      # #      # #      #   #  #    #
+          #    # #    # #      ###### # #      # ###### #    #  ####
+
+|#
+(define (run-amplifiers! mem inputs)
+  (define ios (for/list ([_n 6]) (make-io-queue)))
+  (define amp-in-dev (car ios))
+  (define amp-out-dev (car (reverse ios)))
+  (define machines
+    (for/list ([in-dev  (in-list ios)]
+               [out-dev (in-list (cdr ios))])
+      (machine mem 0 'ready in-dev out-dev)))
+  (for ([v      (in-list inputs)]
+        [in-dev (in-list ios)])
+    (if (list? v)
+        (io-queue-enqueue-all! in-dev v)
+        (io-queue-enqueue! in-dev v)))
+  (io-queue-enqueue! amp-in-dev 0)
+
+  (define (queue-machine q m)
+    (append q (list m)))
+
+  (define (step ready waiting stopped)
+    (match* (ready waiting)
+      [('() '()) amp-out-dev]
+      [('() pending)
+       (define-values (ready waiting)
+         (for/fold ([r null] [w null]) ([m (in-list pending)])
+           (machine-poll! m)
+           (match (machine-state m)
+             ['ready (values (cons m r) w)]
+             ['wait  (values r (cons m w))])))
+       (when (null? ready)
+         (error 'run-amplifiers "no ready machines"))
+       (step ready waiting stopped)]
+      [((cons a-machine ready) waiting)
+       (machine-run! a-machine)
+       (match (machine-state a-machine)
+         ['wait
+          (step ready (queue-machine waiting a-machine) stopped)]
+         ['stop
+          (step ready waiting (cons a-machine stopped))])]))
+  (step machines null null))
+
+(module+ test
+  (define-simple-macro (test-amplifier label:str
+                                       mem:expr
+                                       (inputs:nat ...)
+                                       result)
+    (test-case
+     label
+     (define memory (->memory mem))
+     (define amplifier-out-dev
+       (parameterize ([display-output #f])
+         (run-amplifiers! memory '(inputs ...))))
+     (check-equal? (io-queue-dequeue! amplifier-out-dev)
+                   result)))
+
+  (test-amplifier "basic adding input amplifier"
+                  (vector 3 11       ;; in $a
+                          3 12       ;; in $b
+                          1 11 12 13 ;; add $a $b $c
+                          4 13       ;; out $c
+                          99         ;; exit
+                          0 0 0      ;; $a $b $c
+                          )
+                  (1 1 1 1 1)
+                  5)
+
+  (test-amplifier "example 1"
+                  "3,15,3,16,1002,16,10,16,1,16,15,15,4,15,99,0,0"
+                  (4 3 2 1 0)
+                  43210)
+
+  (test-amplifier "example 2"
+                  (~a "3,23,3,24,1002,24,10,24,1002,23,-1,23,"
+                      "101,5,23,23,1,24,23,23,4,23,99,0,0")
+                  (0 1 2 3 4)
+                  54321)
+
+  (test-amplifier "example 3"
+                  (~a "3,31,3,32,1002,32,10,32,1001,31,-2,31,1007,31,0,"
+                      "33,1002,33,7,33,1,33,31,31,1,32,31,31,4,31,99,"
+                      "0,0,0")
+                  (1 0 4 3 2)
+                  65210))
+
+(module* part-one #f
+  (require racket/list)
+
+  (define memory (call-with-input-file "inputs/07.txt" load-memory))
+  (for/fold ([m #f]) ([inputs (in-permutations '(0 1 2 3 4))])
+    (define out
+      (io-queue-dequeue!
+       (parameterize ([display-output #f])
+         (run-amplifiers! memory inputs))))
+    (if m (max m out) out)))
+
 
 (module* part-two #f)
