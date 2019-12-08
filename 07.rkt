@@ -50,15 +50,50 @@
   (~>> (memref mem ptr)
        (memref mem)))
 
+(struct io-queue (fore aft)
+  #:transparent
+  #:mutable)
 
-;; Input-Device = (Box (Streamof Integer))
-;; read-in! : Input-Device -> Integer
-;; side-effect: updates box
+(define (make-io-queue)
+  (io-queue null null))
+
+(define (io-queue-length q)
+  (+ (length (io-queue-fore q))
+     (length (io-queue-aft q))))
+
+(define (io-queue-empty? q)
+  (zero? (io-queue-length q)))
+
+(define (io-queue-enqueue! q val)
+  (match-define (io-queue _ aft) q)
+  (set-io-queue-aft! q (cons val aft)))
+
+(define (io-queue-enqueue-all! q vals)
+  (for ([v (in-list vals)])
+    (io-queue-enqueue! q v)))
+
+(define (io-queue-dequeue! q)
+  (if (io-queue-empty? q)
+      #f
+      (match q
+        [(io-queue '() aft)
+         (set-io-queue-aft!  q null)
+         (set-io-queue-fore! q (reverse aft))
+         (io-queue-dequeue! q)]
+        [(io-queue (cons val fore) _)
+         (set-io-queue-fore! q fore)
+         val])))
+
+;; read-in! : IO-Queue -> (or/c #f Integer)
+;; remove next input from queue unless queue is empty then
+;; return #f
 (define (read-in! in-dev)
-  (define s (unbox in-dev))
-  (define v (stream-first s))
-  (set-box! in-dev (stream-rest s))
-  v)
+  (io-queue-dequeue! in-dev))
+
+;; write-out! : IO-Queue -> Void
+;; writes an item to the io-queue
+(define (write-out! out-dev val)
+  (io-queue-enqueue! out-dev val))
 
 (define (mode-ref mode mem ptr)
   (match mode
@@ -101,7 +136,7 @@
     (define val (mode-ref ($out-mode $inst) mem (+ 1 ip)))
     (when (display-output)
       (display (~a  val " ")))
-    (set-box! out-dev (cons val (unbox out-dev)))
+    (write-out! out-dev val)
     (+ 2 ip)))
 
 (struct $jmpt (test addr)
@@ -162,6 +197,37 @@
                 mode-nums))))
   (apply (vector-ref instruction-makers rator) modes))
 
+(struct machine
+  (memory [ip #:mutable] [halted? #:mutable] in-dev out-dev))
+
+(define (step-intcode! a-machine)
+  (match-define (machine mem ip halted? in-dev out-dev) a-machine)
+
+  (define (do-operation! opcode)
+    (define $inst (decode-instruction opcode))
+    (define new-ip
+      ($inst in-dev out-dev mem ip))
+    (set-machine-ip! a-machine new-ip))
+
+  (unless halted?
+    (match (memref mem ip)
+      [99 (set-machine-halted?! a-machine #t)]
+      [opcode (do-operation! opcode)])))
+
+(module+ test
+  (test-case
+   "steppy"
+   (define m
+     (machine (vector 1101 1 1 3 99)
+              0
+              #f
+              (make-io-queue)
+              (make-io-queue)))
+   (step-intcode! m)
+   (check-equal? (memref (machine-memory m) 3) 2)
+   (step-intcode! m)
+   (check-true (machine-halted? m))))
+
 
 #|
 run-intcode! : Memory
@@ -171,24 +237,15 @@ run-intcode! : Memory
 |#
 (define (run-intcode! mem
                       #:start  [ip 0]
-                      #:inputs [inputs null]
-                      #:out    [out-dev (box null)])
-  (define in-dev (box inputs))
-
-  ;; do-operation! : Nonnegative-Integer Addr -> Void
-  (define (do-operation! opcode ip)
-    (define $inst (decode-instruction opcode))
-    (define new-ip
-      ($inst in-dev out-dev mem ip))
-    (run new-ip))
-
-  ;; run : Addr
-  ;; runs until ip points to a cell containing 99
-  (define (run ip)
-    (match (memref mem ip)
-      [99 (void)]
-      [opcode (do-operation! opcode ip)]))
-  (run ip))
+                      #:input  [in-dev  (make-io-queue)]
+                      #:output [out-dev (make-io-queue)])
+  (define a-machine
+    (machine mem ip #f in-dev out-dev))
+  (define (run)
+    (unless (machine-halted? a-machine)
+      (step-intcode! a-machine)
+      (run)))
+  (run))
 
 (module+ test
   (begin-for-syntax
@@ -200,24 +257,33 @@ run-intcode! : Memory
                #:attr expr #'literal]))
 
   (define-syntax-parser check-intcode
-    [(_ #:mem mem:intcode-memory
+    [(_ {~optional {~seq #:label label}}
+        #:mem mem:intcode-memory
         {~optional {~seq #:inputs inputs}}
         assertions ...)
      #'(test-case
-        (~a 'mem.literal)
+        (~a {~? label 'mem.literal})
         (define pmem (vector-copy mem.expr))
-        (define out-dev (box null))
+        (define in-dev  (make-io-queue))
+        {~? (io-queue-enqueue-all! in-dev inputs)}
+        (define out-dev (make-io-queue))
         (parameterize ([display-output #f])
           (run-intcode! pmem
-                        #:inputs {~? inputs null}
-                        #:out out-dev))
+                        #:input  in-dev
+                        #:output out-dev))
         (check-intcode-assertion pmem out-dev assertions) ...)])
 
   (define-syntax-parser check-intcode-assertion
     [(_ mem out-dev [#:mem= idx val])
      #'(check-equal? (memref mem idx) val)]
+    [(_ mem out-dev [#:out (val)])
+     #'(check-intcode-assertion mem out-dev [#:out val])]
+    [(_ mem out-dev [#:out (v1 v2 vals ...)])
+     #'(begin
+         (check-intcode-assertion mem out-dev [#:out v1])
+         (check-intcode-assertion mem out-dev [#:out (v2 vals ...)]))]
     [(_ mem out-dev [#:out val])
-     #'(check-equal? (car (unbox out-dev)) val)])
+     #'(check-equal? (io-queue-dequeue! out-dev) val)])
 
   (check-intcode #:mem #(1 0 0 0 99)
                  [#:mem= 0 2])
@@ -232,14 +298,15 @@ run-intcode! : Memory
 
   ;; modes
   (check-intcode #:mem "1002,5,3,5,99,33"
-                 [#:mem= 5 99]))
+                 [#:mem= 5 99])
 
-(module* part-one #f
-  (define mem (call-with-input-file "inputs/05.txt" load-memory))
-  (run-intcode! mem #:inputs (list 1)))
+  ;; day 5 part 1 test
+  (let ([mem (call-with-input-file "inputs/05.txt" load-memory)])
+    (check-intcode #:label "day 5 part 1"
+                   #:mem mem
+                   #:inputs '(1)
+                   [#:out (0 0 0 0 0 0 0 0 0 16348437)]))
 
-
-(module+ test
   ;; $eq
   (check-intcode #:mem "3,9,8,9,10,9,4,9,99,-1,8"
                  #:inputs '(8)
@@ -297,8 +364,16 @@ run-intcode! : Memory
                    [#:out 1000])
     (check-intcode #:mem mem
                    #:inputs '(42)
-                   [#:out 1001])))
+                   [#:out 1001]))
 
-(module* part-two #f
-  (define mem (call-with-input-file "inputs/05.txt" load-memory))
-  (run-intcode! mem #:inputs (list 5)))
+  ;; day 5 part 2 test
+  (let ([mem (call-with-input-file "inputs/05.txt" load-memory)])
+    (check-intcode #:label "day 5 part 2"
+                   #:mem mem
+                   #:inputs '(5)
+                   [#:out 6959377])))
+
+
+(module* part-one #f)
+
+(module* part-two #f)
