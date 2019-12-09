@@ -53,9 +53,14 @@ Behold!  A lot of imperative code and mutation!
                 (vector 1 2 3 4 5 6)))
 
 
-;; memset! : Memory Addr Nonnegative-Integer -> Void
-;; looks up Addr in i and sets that Addr to v
-(define memset! vector-set!)
+;; memset! : Memory Mode Addr Addr Nonnegative-Integer -> Void
+;; looks up Addr (possibly modified by base addr depending on mode)
+;; in i and sets that Addr to v
+(define (memset! mem mode base addr val)
+  (let ([addr (match mode
+                ['pos addr]
+                ['rel (+ addr base)])])
+    (vector-set! mem addr val)))
 
 ;; memref : Memory Addr -> Nonnegative-Integer
 ;; looks up Addr in memory and returns value at that Addr
@@ -133,42 +138,47 @@ Behold!  A lot of imperative code and mutation!
 
 |#
 
-(define (mode-ref mode mem ptr)
+(define (mode-ref mode mem base ptr)
   (match mode
     ['imm (memref mem ptr)]
-    ['pos (memderef mem ptr)]))
+    ['pos (memderef mem ptr)]
+    ['rel (memderef mem (+ base ptr))]))
 
-(struct $add (a b)
+(struct $add (a b c)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ base _ _) a-machine)
     (memset! mem
+             ($add-c $inst)
+             base
              (memref mem (+ 3 ip))
-             (+ (mode-ref ($add-a $inst) mem (+ 1 ip))
-                (mode-ref ($add-b $inst) mem (+ 2 ip))))
+             (+ (mode-ref ($add-a $inst) mem base (+ 1 ip))
+                (mode-ref ($add-b $inst) mem base (+ 2 ip))))
     (set-machine-ip! a-machine (+ 4 ip))))
 
-(struct $mul (a b)
+(struct $mul (a b c)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ base _ _) a-machine)
     (memset! mem
+             ($mul-c $inst)
+             base
              (memref mem (+ 3 ip))
-             (* (mode-ref ($mul-a $inst) mem (+ 1 ip))
-                (mode-ref ($mul-b $inst) mem (+ 2 ip))))
+             (* (mode-ref ($mul-a $inst) mem base (+ 1 ip))
+                (mode-ref ($mul-b $inst) mem base (+ 2 ip))))
     (set-machine-ip! a-machine (+ 4 ip))))
 
-(struct $in ()
+(struct $in (mode)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ in-dev _) a-machine)
+    (match-define (machine _ mem ip _ base in-dev _) a-machine)
     (define val-in (read-in! in-dev))
     (cond
       [val-in
-       (memset! mem (memref mem (+ 1 ip)) val-in)
+       (memset! mem ($in-mode $inst) base (memref mem (+ 1 ip)) val-in)
        (set-machine-ip! a-machine (+ 2 ip))]
       [else
        (set-machine-state! a-machine 'wait)])))
@@ -179,8 +189,8 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ out-dev) a-machine)
-    (define val (mode-ref ($out-mode $inst) mem (+ 1 ip)))
+    (match-define (machine _ mem ip _ base _ out-dev) a-machine)
+    (define val (mode-ref ($out-mode $inst) mem base (+ 1 ip)))
     (when (display-output)
       (display (~a  val " ")))
     (write-out! out-dev val)
@@ -190,52 +200,65 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ base _ _) a-machine)
     (set-machine-ip!
      a-machine
-     (if (zero? (mode-ref ($jmpt-test $inst) mem (+ 1 ip)))
+     (if (zero? (mode-ref ($jmpt-test $inst) mem base (+ 1 ip)))
          (+ 3 ip)
-         (mode-ref ($jmpt-addr $inst) mem (+ 2 ip))))))
+         (mode-ref ($jmpt-addr $inst) mem base (+ 2 ip))))))
 
 (struct $jmpf (test addr)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ base _ _) a-machine)
     (set-machine-ip!
      a-machine
-     (if (zero? (mode-ref ($jmpf-test $inst) mem (+ 1 ip)))
-         (mode-ref ($jmpf-addr $inst) mem (+ 2 ip))
+     (if (zero? (mode-ref ($jmpf-test $inst) mem base (+ 1 ip)))
+         (mode-ref ($jmpf-addr $inst) mem base (+ 2 ip))
          (+ 3 ip)))))
 
-(struct $lt (a b)
+(struct $lt (a b c)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ _) a-machine)
-    (define v1 (mode-ref ($lt-a $inst) mem (+ 1 ip)))
-    (define v2 (mode-ref ($lt-b $inst) mem (+ 2 ip)))
+    (match-define (machine _ mem ip _ base _ _) a-machine)
+    (define v1 (mode-ref ($lt-a $inst) mem base (+ 1 ip)))
+    (define v2 (mode-ref ($lt-b $inst) mem base (+ 2 ip)))
     (memset! mem
+             ($lt-c $inst)
+             base
              (memref mem (+ 3 ip))
              (if (< v1 v2) 1 0))
     (set-machine-ip! a-machine (+ 4 ip))))
 
-(struct $eq (a b)
+(struct $eq (a b c)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine _ mem ip _ _ _) a-machine)
-    (define v1 (mode-ref ($eq-a $inst) mem (+ 1 ip)))
-    (define v2 (mode-ref ($eq-b $inst) mem (+ 2 ip)))
+    (match-define (machine _ mem ip _ base _ _) a-machine)
+    (define v1 (mode-ref ($eq-a $inst) mem base (+ 1 ip)))
+    (define v2 (mode-ref ($eq-b $inst) mem base (+ 2 ip)))
     (memset! mem
+             ($eq-c $inst)
+             base
              (memref mem (+ 3 ip))
              (if (= v1 v2) 1 0))
     (set-machine-ip! a-machine (+ 4 ip))))
 
+(struct $relbase (mode)
+  #:transparent
+  #:property prop:procedure
+  (lambda ($inst a-machine)
+    (match-define (machine _ mem ip _ base _ _) a-machine)
+    (define new-base
+      (+ base (mode-ref ($relbase-mode $inst) mem base (+ 1 ip))))
+    (set-machine-relative-base! a-machine new-base)
+    (set-machine-ip! a-machine (+ 2 ip))))
 
-(define instruction-num-decode-args (vector #f 2 2 0 1 2 2 2 2))
+(define instruction-num-decode-args (vector #f 3 3 1 1 2 2 3 3 1))
 (define instruction-makers
-  (vector #f $add $mul $in $out $jmpt $jmpf $lt $eq))
+  (vector #f $add $mul $in $out $jmpt $jmpf $lt $eq $relbase))
 
 ;; decode-instruction : Nonnegative-Integer -> $instruction
 (define (decode-instruction rator+modes)
@@ -247,7 +270,10 @@ Behold!  A lot of imperative code and mutation!
                #:result (reverse modes))
               ([i (in-range num-args)])
       (let-values ([(mode-nums mode) (quotient/remainder mode-nums 10)])
-        (values (cons (if (zero? mode) 'pos 'imm)
+        (values (cons (match mode
+                        [0 'pos]
+                        [1 'imm]
+                        [2 'rel])
                       modes)
                 mode-nums))))
   (apply (vector-ref instruction-makers rator) modes))
@@ -264,8 +290,9 @@ Behold!  A lot of imperative code and mutation!
 (struct machine
   (id
    memory
-   [ip    #:mutable]
-   [state #:mutable]
+   [ip            #:mutable]
+   [state         #:mutable]
+   [relative-base #:mutable]
    in-dev
    out-dev))
 
@@ -281,10 +308,10 @@ Behold!  A lot of imperative code and mutation!
 (define stepping-trace? (make-parameter #f))
 
 (define (step-intcode! a-machine)
-  (match-define (machine id mem ip _ _ _) a-machine)
+  (match-define (machine id mem ip _ _ _ _) a-machine)
 
   (define (do-operation! opcode)
-    (define $inst  (decode-instruction opcode))
+    (define $inst (decode-instruction opcode))
     (when (stepping-trace?)
       (displayln (~a "[" id "] " $inst)))
     ($inst a-machine)
@@ -320,6 +347,7 @@ Behold!  A lot of imperative code and mutation!
               (vector 1101 1 1 3 99)
               0
               'ready
+              0
               (make-io-queue)
               (make-io-queue)))
    (step-intcode! m)
@@ -347,7 +375,7 @@ Make a machine from inputs and run it until it's not in the ready state.
                             #:input  [in-dev  (make-io-queue)]
                             #:output [out-dev (make-io-queue)])
   (define a-machine
-    (machine 0 mem ip 'ready in-dev out-dev))
+    (machine 0 mem ip 'ready 0 in-dev out-dev))
   (machine-run! a-machine))
 
 (module+ test
@@ -486,7 +514,7 @@ Make a machine from inputs and run it until it's not in the ready state.
     (for/list ([n       (in-naturals)]
                [in-dev  (in-list ios)]
                [out-dev (in-list (cdr ios))])
-      (machine n (vector-copy mem) 0 'ready in-dev out-dev)))
+      (machine n (vector-copy mem) 0 'ready 0 in-dev out-dev)))
 
   (for ([v      (in-list inputs)]
         [in-dev (in-list ios)])
@@ -588,7 +616,7 @@ Make a machine from inputs and run it until it's not in the ready state.
     (for/list ([n       (in-naturals)]
                [in-dev  (in-list ios)]
                [out-dev (in-list (append (cdr ios) (list amp-in-dev)))])
-      (machine n (vector-copy mem) 0 'ready in-dev out-dev)))
+      (machine n (vector-copy mem) 0 'ready 0 in-dev out-dev)))
 
   ;; setup initial inputs
   (for ([v      (in-list inputs)]
