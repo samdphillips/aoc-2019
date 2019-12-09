@@ -142,7 +142,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ _ _) a-machine)
     (memset! mem
              (memref mem (+ 3 ip))
              (+ (mode-ref ($add-a $inst) mem (+ 1 ip))
@@ -153,7 +153,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ _ _) a-machine)
     (memset! mem
              (memref mem (+ 3 ip))
              (* (mode-ref ($mul-a $inst) mem (+ 1 ip))
@@ -164,7 +164,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ in-dev _) a-machine)
+    (match-define (machine _ mem ip _ in-dev _) a-machine)
     (define val-in (read-in! in-dev))
     (cond
       [val-in
@@ -173,13 +173,13 @@ Behold!  A lot of imperative code and mutation!
       [else
        (set-machine-state! a-machine 'wait)])))
 
-(define display-output (make-parameter #t))
+(define display-output (make-parameter #f))
 
 (struct $out (mode)
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ out-dev) a-machine)
+    (match-define (machine _ mem ip _ _ out-dev) a-machine)
     (define val (mode-ref ($out-mode $inst) mem (+ 1 ip)))
     (when (display-output)
       (display (~a  val " ")))
@@ -190,7 +190,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ _ _) a-machine)
     (set-machine-ip!
      a-machine
      (if (zero? (mode-ref ($jmpt-test $inst) mem (+ 1 ip)))
@@ -201,7 +201,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ _ _) a-machine)
     (set-machine-ip!
      a-machine
      (if (zero? (mode-ref ($jmpf-test $inst) mem (+ 1 ip)))
@@ -212,7 +212,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ _ _) a-machine)
     (define v1 (mode-ref ($lt-a $inst) mem (+ 1 ip)))
     (define v2 (mode-ref ($lt-b $inst) mem (+ 2 ip)))
     (memset! mem
@@ -224,7 +224,7 @@ Behold!  A lot of imperative code and mutation!
   #:transparent
   #:property prop:procedure
   (lambda ($inst a-machine)
-    (match-define (machine mem ip _ _ _) a-machine)
+    (match-define (machine _ mem ip _ _ _) a-machine)
     (define v1 (mode-ref ($eq-a $inst) mem (+ 1 ip)))
     (define v2 (mode-ref ($eq-b $inst) mem (+ 2 ip)))
     (memset! mem
@@ -262,7 +262,8 @@ Behold!  A lot of imperative code and mutation!
 |#
 
 (struct machine
-  (memory
+  (id
+   memory
    [ip    #:mutable]
    [state #:mutable]
    in-dev
@@ -277,12 +278,27 @@ Behold!  A lot of imperative code and mutation!
 (define (machine-waiting? a-machine)
   (eq? (machine-state a-machine) 'wait))
 
+(define stepping-trace? (make-parameter #f))
+
 (define (step-intcode! a-machine)
-  (match-define (machine mem ip _ _ _) a-machine)
+  (match-define (machine id mem ip _ _ _) a-machine)
 
   (define (do-operation! opcode)
     (define $inst  (decode-instruction opcode))
-    ($inst a-machine))
+    (when (stepping-trace?)
+      (displayln (~a "[" id "] " $inst)))
+    ($inst a-machine)
+    (when (stepping-trace?)
+      (for-each (lambda (label accessor)
+                  (displayln (~a "[" id "] "
+                                 label ": "
+                                 (accessor a-machine))))
+                (list 'mem 'ip 'state 'in-dev 'out-dev)
+                (list machine-memory
+                      machine-ip
+                      machine-state
+                      machine-in-dev
+                      machine-out-dev))))
 
   (when (machine-ready? a-machine)
     (match (memref mem ip)
@@ -300,7 +316,8 @@ Behold!  A lot of imperative code and mutation!
   (test-case
    "steppy"
    (define m
-     (machine (vector 1101 1 1 3 99)
+     (machine 0
+              (vector 1101 1 1 3 99)
               0
               'ready
               (make-io-queue)
@@ -330,7 +347,7 @@ Make a machine from inputs and run it until it's not in the ready state.
                             #:input  [in-dev  (make-io-queue)]
                             #:output [out-dev (make-io-queue)])
   (define a-machine
-    (machine mem ip 'ready in-dev out-dev))
+    (machine 0 mem ip 'ready in-dev out-dev))
   (machine-run! a-machine))
 
 (module+ test
@@ -466,14 +483,14 @@ Make a machine from inputs and run it until it's not in the ready state.
   (define amp-in-dev (car ios))
   (define amp-out-dev (car (reverse ios)))
   (define machines
-    (for/list ([in-dev  (in-list ios)]
+    (for/list ([n       (in-naturals)]
+               [in-dev  (in-list ios)]
                [out-dev (in-list (cdr ios))])
-      (machine mem 0 'ready in-dev out-dev)))
+      (machine n mem 0 'ready in-dev out-dev)))
+
   (for ([v      (in-list inputs)]
         [in-dev (in-list ios)])
-    (if (list? v)
-        (io-queue-enqueue-all! in-dev v)
-        (io-queue-enqueue! in-dev v)))
+    (io-queue-enqueue! in-dev v))
   (io-queue-enqueue! amp-in-dev 0)
 
   (define (queue-machine q m)
@@ -490,7 +507,7 @@ Make a machine from inputs and run it until it's not in the ready state.
              ['ready (values (cons m r) w)]
              ['wait  (values r (cons m w))])))
        (when (null? ready)
-         (error 'run-amplifiers "no ready machines"))
+         (error 'run-amplifiers! "no ready machines"))
        (step ready waiting stopped)]
       [((cons a-machine ready) waiting)
        (machine-run! a-machine)
@@ -520,24 +537,24 @@ Make a machine from inputs and run it until it's not in the ready state.
                           3 12       ;; in $b
                           1 11 12 13 ;; add $a $b $c
                           4 13       ;; out $c
-                          99         ;; exit
+                          99         ;; halt
                           0 0 0      ;; $a $b $c
                           )
                   (1 1 1 1 1)
                   5)
 
-  (test-amplifier "example 1"
+  (test-amplifier "part 1 - example 1"
                   "3,15,3,16,1002,16,10,16,1,16,15,15,4,15,99,0,0"
                   (4 3 2 1 0)
                   43210)
 
-  (test-amplifier "example 2"
+  (test-amplifier "part 1 - example 2"
                   (~a "3,23,3,24,1002,24,10,24,1002,23,-1,23,"
                       "101,5,23,23,1,24,23,23,4,23,99,0,0")
                   (0 1 2 3 4)
                   54321)
 
-  (test-amplifier "example 3"
+  (test-amplifier "part 1 - example 3"
                   (~a "3,31,3,32,1002,32,10,32,1001,31,-2,31,1007,31,0,"
                       "33,1002,33,7,33,1,33,31,31,1,32,31,31,4,31,99,"
                       "0,0,0")
