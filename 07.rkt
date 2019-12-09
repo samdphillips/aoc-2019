@@ -290,7 +290,7 @@ Behold!  A lot of imperative code and mutation!
     ($inst a-machine)
     (when (stepping-trace?)
       (for-each (lambda (label accessor)
-                  (displayln (~a "[" id "] "
+                  (displayln (~a "[" id "]     "
                                  label ": "
                                  (accessor a-machine))))
                 (list 'mem 'ip 'state 'in-dev 'out-dev)
@@ -486,7 +486,7 @@ Make a machine from inputs and run it until it's not in the ready state.
     (for/list ([n       (in-naturals)]
                [in-dev  (in-list ios)]
                [out-dev (in-list (cdr ios))])
-      (machine n mem 0 'ready in-dev out-dev)))
+      (machine n (vector-copy mem) 0 'ready in-dev out-dev)))
 
   (for ([v      (in-list inputs)]
         [in-dev (in-list ios)])
@@ -573,4 +573,104 @@ Make a machine from inputs and run it until it's not in the ready state.
     (if m (max m out) out)))
 
 
-(module* part-two #f)
+#|
+  run-feedback-amplifiers!
+  Same as before, except we connect the first io-queue to the out-dev
+  of the last intcode machine.
+|#
+(define (run-feedback-amplifiers! mem inputs)
+  (define ios (for/list ([_n 5]) (make-io-queue)))
+  (define amp-in-dev (car ios))
+  (define amp-out-dev amp-in-dev)
+
+  ;; set up connections (this time with feedback)
+  (define machines
+    (for/list ([n       (in-naturals)]
+               [in-dev  (in-list ios)]
+               [out-dev (in-list (append (cdr ios) (list amp-in-dev)))])
+      (machine n (vector-copy mem) 0 'ready in-dev out-dev)))
+
+  ;; setup initial inputs
+  (for ([v      (in-list inputs)]
+        [in-dev (in-list ios)])
+    (io-queue-enqueue! in-dev v))
+  (io-queue-enqueue! amp-in-dev 0)
+
+  (define (queue-machine q m)
+    (append q (list m)))
+
+  (define (step ready waiting stopped)
+    (match* (ready waiting)
+      [('() '()) amp-out-dev]
+      [('() pending)
+       (define-values (ready waiting)
+         (for/fold ([r null] [w null]) ([m (in-list pending)])
+           (machine-poll! m)
+           (match (machine-state m)
+             ['ready (values (cons m r) w)]
+             ['wait  (values r (cons m w))])))
+       (when (null? ready)
+         (error 'run-feedback-amplifiers! "no ready machines"))
+       (step ready waiting stopped)]
+      [((cons a-machine ready) waiting)
+       (machine-run! a-machine)
+       (match (machine-state a-machine)
+         ['wait
+          (step ready (queue-machine waiting a-machine) stopped)]
+         ['stop
+          (step ready waiting (cons a-machine stopped))])]))
+  (step machines null null))
+
+(module+ test
+  (define-simple-macro (test-feedback-amplifier label:str
+                                                mem:expr
+                                                (inputs:nat ...)
+                                                result)
+    (test-case
+     label
+     (define memory (->memory mem))
+     (define amplifier-out-dev
+       (parameterize ([display-output #f])
+         (run-feedback-amplifiers! memory '(inputs ...))))
+     (check-equal? (io-queue-dequeue! amplifier-out-dev)
+                   result)))
+
+  (test-feedback-amplifier "basic adding input feedback amplifier"
+                           (vector 3 11       ;; in $a
+                                   3 12       ;; in $b
+                                   1 11 12 13 ;; add $a $b $c
+                                   4 13       ;; out $c
+                                   99         ;; halt
+                                   0 0 0      ;; $a $b $c
+                                   )
+                           (1 1 1 1 1)
+                           5)
+
+  (test-feedback-amplifier "part 2 - example 1"
+                           (~a "3,26,1001,26,-4,26,3,27,1002,27,2,27,"
+                               "1,27,26,27,4,27,1001,28,-1,28,1005,28,"
+                               "6,99,0,0,5")
+                           (9 8 7 6 5)
+                           139629729)
+
+  (test-feedback-amplifier "part 2 - example 2"
+                           (~a "3,52,1001,52,-5,52,3,53,1,52,56,54,"
+                               "1007,54,5,55,1005,55,26,1001,54,-5,"
+                               "54,1105,1,12,1,53,54,53,1008,54,0,"
+                               "55,1001,55,1,55,2,53,55,53,4,53,"
+                               "1001,56,-1,56,1005,56,6,99,"
+                               "0,0,0,0,10")
+                           (9 7 8 5 6)
+                           18216))
+
+(module* part-two #f
+  (require racket/list)
+
+  (define memory (call-with-input-file "inputs/07.txt" load-memory))
+  (for/fold ([m #f]) ([inputs (in-permutations '(5 6 7 8 9))])
+    (define out
+      (io-queue-dequeue!
+       (parameterize ([display-output #f])
+         (run-feedback-amplifiers! memory inputs))))
+    (if m (max m out) out)))
+
