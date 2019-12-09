@@ -142,7 +142,7 @@ Behold!  A lot of imperative code and mutation!
   (match mode
     ['imm (memref mem ptr)]
     ['pos (memderef mem ptr)]
-    ['rel (memderef mem (+ base ptr))]))
+    ['rel (memref mem (+ base (memref mem ptr)))]))
 
 (struct $add (a b c)
   #:transparent
@@ -320,10 +320,11 @@ Behold!  A lot of imperative code and mutation!
                   (displayln (~a "[" id "]     "
                                  label ": "
                                  (accessor a-machine))))
-                (list 'mem 'ip 'state 'in-dev 'out-dev)
+                (list 'mem 'ip 'state 'relative-base 'in-dev 'out-dev)
                 (list machine-memory
                       machine-ip
                       machine-state
+                      machine-relative-base
                       machine-in-dev
                       machine-out-dev))))
 
@@ -494,7 +495,28 @@ Make a machine from inputs and run it until it's not in the ready state.
     (check-intcode #:label "day 5 part 2"
                    #:mem mem
                    #:inputs '(5)
-                   [#:out 6959377])))
+                   [#:out 6959377]))
+
+  (check-intcode #:label "day 9 part 1 example 1"
+                 #:mem
+                 (~a "109,1,204,-1,1001,100,1,100,1008,100,16,101,"
+                     "1006,101,0,99")
+                 [#:out (109 1 204 -1 1001 100 1 100 1008 100 16 101
+                             1006 101 0 99)]))
+
+;; XXX:
+(define (gar)
+  (parameterize ([display-output #t]
+                 [stepping-trace? #t])
+    (define out (make-io-queue))
+    (setup-run-intcode!
+     (call-with-input-string
+      (~a "109,1,204,-1,1001,100,1,100,1008,100,16,101,"
+          "1006,101,0,99")
+      load-memory)
+     #:output out)
+    out))
+
 
 #|
 
