@@ -766,4 +766,13 @@ Make a machine from inputs and run it until it's not in the ready state.
     (machine-run! boost-machine))
   (newline))
 
-(module* part-two #f)
+(module* part-two #f
+  (define memory (call-with-input-file "inputs/09.txt" load-memory))
+  (define in-dev (make-io-queue))
+  (define out-dev (make-io-queue))
+  (io-queue-enqueue! in-dev 2)
+  (define boost-machine
+    (machine 0 memory 0 'ready 0 in-dev out-dev))
+  (parameterize ([display-output? #t])
+    (machine-run! boost-machine))
+  (newline))
