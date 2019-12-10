@@ -11,6 +11,7 @@ Behold!  A lot of imperative code and mutation!
          racket/port
          racket/string
          racket/vector
+         mischief/for
          threading)
 
 (module+ test
@@ -19,8 +20,6 @@ Behold!  A lot of imperative code and mutation!
            racket/vector
            rackunit
            syntax/parse/define))
-
-;; Program = Memory = (Vectorof Integer)
 
 #|
                    #    # ###### #    #  ####  #####  #   #
@@ -31,40 +30,96 @@ Behold!  A lot of imperative code and mutation!
                    #    # ###### #    #  ####  #    #   #
 |#
 
+;; Pagetable : (Hash Nonnegative-Integer Page)
+;; Program = Memory = Pagetable
+(struct pagetable (pages))
+
+(define pagetable-addr-shift 3)
+(define pagetable-addr-mask  #b111)
+(define pagetable-page-size  (add1 pagetable-addr-mask))
+
+(define (make-pagetable)
+  (pagetable (make-hash)))
+
+(define (memory-copy memory)
+  (pagetable
+    (for/hash! ([(pageid page) (in-hash (pagetable-pages memory))])
+      (values pageid (vector-copy page)))))
+
+(define (pagetable-alloc! memory pageid)
+  (hash-set! (pagetable-pages memory)
+             pageid
+             (make-vector pagetable-page-size 0)))
+
+(define (load-pagetable a-sequence)
+  (define memory (make-pagetable))
+  (for ([v    a-sequence]
+        [addr (in-naturals)])
+    (memset! memory 'pos #f addr v))
+  memory)
+
+(define (pagetable-physical-addr vaddr)
+  (values (arithmetic-shift vaddr pagetable-addr-shift)
+          (bitwise-and vaddr pagetable-addr-mask)))
+
+(define (pagetable-has-page? memory pageid)
+  (hash-has-key? (pagetable-pages memory) pageid))
+
+(define (pagetable-page-ref memory pageid)
+  (unless (pagetable-has-page? memory pageid)
+    (pagetable-alloc! memory pageid))
+  (hash-ref (pagetable-pages memory) pageid))
+
 ;; load-memory : Input-Port -> Memory
 (define (load-memory an-input-port)
   (~>> (port->string an-input-port)
        (string-split _ #rx",")
        (map (lambda~> string-trim))
        (map string->number)
-       (apply vector)))
+       (load-pagetable)))
 
 (define (->memory a-value)
   (match a-value
-    [(? vector?) a-value]
+    [(? pagetable?) a-value]
+    [(? vector?)    (load-pagetable a-value)]
     [(? string?)
      (call-with-input-string a-value load-memory)]))
 
 
 (module+ test
-  (check-equal? (call-with-input-string "1,2,3,4,5,6" load-memory)
-                (vector 1 2 3 4 5 6))
-  (check-equal? (call-with-input-string "1,2,3,4,5,6\r" load-memory)
-                (vector 1 2 3 4 5 6)))
+  (test-begin
+    "load values"
+    (let ([memory (call-with-input-string "1,2,3,4,5,6" load-memory)])
+      (for ([v (in-vector (vector 1 2 3 4 5 6))]
+            [i (in-naturals)])
+        (check-equal? (memref memory i) v)))
+
+    (let ([memory (call-with-input-string "1,2,3,4,5,6\r" load-memory)])
+      (for ([v (in-vector (vector 1 2 3 4 5 6))]
+            [i (in-naturals)])
+        (check-equal? (memref memory i) v)))))
 
 
 ;; memset! : Memory Mode Addr Addr Nonnegative-Integer -> Void
 ;; looks up Addr (possibly modified by base addr depending on mode)
 ;; in i and sets that Addr to v
-(define (memset! mem mode base addr val)
-  (let ([addr (match mode
-                ['pos addr]
-                ['rel (+ addr base)])])
-    (vector-set! mem addr val)))
+(define (memset! mem mode base inst-addr val)
+  (define addr
+    (match mode
+      ['pos inst-addr]
+      ['rel (+ inst-addr base)]))
+  (define-values (pageid page-offset)
+    (pagetable-physical-addr addr))
+  (define page (pagetable-page-ref mem pageid))
+  (vector-set! page page-offset val))
 
 ;; memref : Memory Addr -> Nonnegative-Integer
 ;; looks up Addr in memory and returns value at that Addr
-(define memref vector-ref)
+(define (memref memory addr)
+  (define-values (pageid page-offset)
+    (pagetable-physical-addr addr))
+  (define page (pagetable-page-ref memory pageid))
+  (vector-ref page page-offset))
 
 ;; memderef : Memory Addr -> Nonnegative-Integer
 ;; look up the Value in the cell pointed to by Addr
@@ -345,7 +400,8 @@ Behold!  A lot of imperative code and mutation!
    "steppy"
    (define m
      (machine 0
-              (vector 1101 1 1 3 99)
+              (load-pagetable
+                (vector 1101 1 1 3 99))
               0
               'ready
               0
@@ -387,7 +443,7 @@ Make a machine from inputs and run it until it's not in the ready state.
         assertions ...)
      #'(test-case
         (~a {~? label 'mem})
-        (define pmem (vector-copy (->memory mem)))
+        (define pmem (memory-copy (->memory mem)))
         (define in-dev  (make-io-queue))
         {~? (io-queue-enqueue-all! in-dev inputs)}
         (define out-dev (make-io-queue))
@@ -536,7 +592,7 @@ Make a machine from inputs and run it until it's not in the ready state.
     (for/list ([n       (in-naturals)]
                [in-dev  (in-list ios)]
                [out-dev (in-list (cdr ios))])
-      (machine n (vector-copy mem) 0 'ready 0 in-dev out-dev)))
+      (machine n (memory-copy mem) 0 'ready 0 in-dev out-dev)))
 
   (for ([v      (in-list inputs)]
         [in-dev (in-list ios)])
@@ -638,7 +694,7 @@ Make a machine from inputs and run it until it's not in the ready state.
     (for/list ([n       (in-naturals)]
                [in-dev  (in-list ios)]
                [out-dev (in-list (append (cdr ios) (list amp-in-dev)))])
-      (machine n (vector-copy mem) 0 'ready 0 in-dev out-dev)))
+      (machine n (memory-copy mem) 0 'ready 0 in-dev out-dev)))
 
   ;; setup initial inputs
   (for ([v      (in-list inputs)]
