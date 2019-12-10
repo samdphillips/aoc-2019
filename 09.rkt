@@ -238,7 +238,7 @@ Behold!  A lot of imperative code and mutation!
       [else
        (set-machine-state! a-machine 'wait)])))
 
-(define display-output (make-parameter #f))
+(define display-output? (make-parameter #f))
 
 (struct $out (mode)
   #:transparent
@@ -246,7 +246,7 @@ Behold!  A lot of imperative code and mutation!
   (lambda ($inst a-machine)
     (match-define (machine _ mem ip _ base _ out-dev) a-machine)
     (define val (mode-ref ($out-mode $inst) mem base (+ 1 ip)))
-    (when (display-output)
+    (when (display-output?)
       (display (~a  val " ")))
     (write-out! out-dev val)
     (set-machine-ip! a-machine (+ 2 ip))))
@@ -447,7 +447,7 @@ Make a machine from inputs and run it until it's not in the ready state.
         (define in-dev  (make-io-queue))
         {~? (io-queue-enqueue-all! in-dev inputs)}
         (define out-dev (make-io-queue))
-        (parameterize ([display-output #f])
+        (parameterize ([display-output? #f])
           (setup-run-intcode! pmem
                               #:input  in-dev
                               #:output out-dev))
@@ -558,20 +558,17 @@ Make a machine from inputs and run it until it's not in the ready state.
                  (~a "109,1,204,-1,1001,100,1,100,1008,100,16,101,"
                      "1006,101,0,99")
                  [#:out (109 1 204 -1 1001 100 1 100 1008 100 16 101
-                             1006 101 0 99)]))
+                         1006 101 0 99)])
 
-;; XXX:
-(define (gar)
-  (parameterize ([display-output #t]
-                 [stepping-trace? #t])
-    (define out (make-io-queue))
-    (setup-run-intcode!
-     (call-with-input-string
-      (~a "109,1,204,-1,1001,100,1,100,1008,100,16,101,"
-          "1006,101,0,99")
-      load-memory)
-     #:output out)
-    out))
+  (check-intcode #:label "day 9 part 1 example 2"
+                 #:mem
+                 "1102,34915192,34915192,7,4,7,99,0" 
+                 [#:out 1219070632396864])
+
+  (check-intcode #:label "day 9 part 1 example 3"
+                 #:mem
+                 "104,1125899906842624,99"
+                 [#:out 1125899906842624]))
 
 
 #|
@@ -633,7 +630,7 @@ Make a machine from inputs and run it until it's not in the ready state.
      label
      (define memory (->memory mem))
      (define amplifier-out-dev
-       (parameterize ([display-output #f])
+       (parameterize ([display-output? #f])
          (run-amplifiers! memory '(inputs ...))))
      (check-equal? (io-queue-dequeue! amplifier-out-dev)
                    result)))
@@ -666,17 +663,6 @@ Make a machine from inputs and run it until it's not in the ready state.
                       "0,0,0")
                   (1 0 4 3 2)
                   65210))
-
-(module* part-one #f
-  (require racket/list)
-
-  (define memory (call-with-input-file "inputs/07.txt" load-memory))
-  (for/fold ([m #f]) ([inputs (in-permutations '(0 1 2 3 4))])
-    (define out
-      (io-queue-dequeue!
-       (parameterize ([display-output #f])
-         (run-amplifiers! memory inputs))))
-    (if m (max m out) out)))
 
 
 #|
@@ -736,7 +722,7 @@ Make a machine from inputs and run it until it's not in the ready state.
      label
      (define memory (->memory mem))
      (define amplifier-out-dev
-       (parameterize ([display-output #f])
+       (parameterize ([display-output? #f])
          (run-feedback-amplifiers! memory '(inputs ...))))
      (check-equal? (io-queue-dequeue! amplifier-out-dev)
                    result)))
@@ -769,14 +755,15 @@ Make a machine from inputs and run it until it's not in the ready state.
                            (9 7 8 5 6)
                            18216))
 
-(module* part-two #f
-  (require racket/list)
+(module* part-one #f
+  (define memory (call-with-input-file "inputs/09.txt" load-memory))
+  (define in-dev (make-io-queue))
+  (define out-dev (make-io-queue))
+  (io-queue-enqueue! in-dev 1)
+  (define boost-machine
+    (machine 0 memory 0 'ready 0 in-dev out-dev))
+  (parameterize ([display-output? #t])
+    (machine-run! boost-machine))
+  (newline))
 
-  (define memory (call-with-input-file "inputs/07.txt" load-memory))
-  (for/fold ([m #f]) ([inputs (in-permutations '(5 6 7 8 9))])
-    (define out
-      (io-queue-dequeue!
-       (parameterize ([display-output #f])
-         (run-feedback-amplifiers! memory inputs))))
-    (if m (max m out) out)))
-
+(module* part-two #f)
