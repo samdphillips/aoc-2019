@@ -125,13 +125,13 @@ MAP
 
 
   (check-equal?
-   (call-with-input-file "test-inputs/1011.txt"
+   (call-with-input-file "test-inputs/10_1_01.txt"
      (lambda (in)
        (solve-part-one (read-asteroid-map in))))
    33)
 
   (check-equal?
-   (call-with-input-file "test-inputs/1012.txt"
+   (call-with-input-file "test-inputs/10_1_02.txt"
      (lambda (in)
        (solve-part-one (read-asteroid-map in))))
    41)
