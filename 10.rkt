@@ -27,25 +27,42 @@ b = y - dy / dx * x
 
 (struct posn (x y) #:transparent)
 
+
 (define (line-coefficients p0 p1)
   (match-define (posn x0 y0) p0)
   (match-define (posn x1 y1) p1)
   (define dx (- x0 x1))
   (define dy (- y0 y1))
-  ;; normalize the vectors and then the coefficients are the same
-  ;; for colinear points
+  ;; normalize the vector so the coefficients are the same
+  ;; for colinear points.  This simplifies to smallest integers
+  ;; not the unit vector which keeps the coefficients exact and they
+  ;; can be hashed
   (define-values (ndx ndy)
-    (let ([m (sqrt (+ (* dx dx) (* dy dy)))])
-      (values (/ dx m) (/ dy m))))
+    (let ([m (gcd dx dy)])
+      (values (if (zero? dx) 0 (/ m dx))
+              (if (zero? dy) 0 (/ m dy)))))
   (if (zero? dx)
       (list ndy 0 0)
       (list ndy (- ndx) (* ndx (- y0 (* (/ ndy ndx) x0))))))
 
+
 (module+ test
-  (check-true (equal? (line-coefficients (posn 3 3) (posn 2 2))
-                      (line-coefficients (posn 3 3) (posn 1 1))))
-  (check-false (equal? (line-coefficients (posn 3 3) (posn 2 2))
-                       (line-coefficients (posn 3 3) (posn 2 1)))))
+  (check-equal? (line-coefficients (posn 3 3) (posn 2 2))
+                (line-coefficients (posn 3 3) (posn 1 1)))
+  (check-not-equal? (line-coefficients (posn 3 3) (posn 2 2))
+                    (line-coefficients (posn 3 3) (posn 2 1)))
+
+  (check-equal? (line-coefficients (posn 0 0) (posn 3 2))
+                (line-coefficients (posn 0 0) (posn 6 4)))
+
+  (check-equal? (line-coefficients (posn 0 0) (posn 0 1))
+                (line-coefficients (posn 0 0) (posn 0 2)))
+
+  (check-equal? (line-coefficients (posn 0 0) (posn 1 0))
+                (line-coefficients (posn 0 0) (posn 2 0)))
+
+  (check-not-equal? (line-coefficients (posn 5 5) (posn 10 10))
+                    (line-coefficients (posn 5 5) (posn 1 1))))
 
 
 (define (solve-part-one asteroids)
