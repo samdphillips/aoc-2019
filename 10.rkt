@@ -27,42 +27,41 @@ b = y - dy / dx * x
 
 (struct posn (x y) #:transparent)
 
+#|
 
-(define (line-coefficients p0 p1)
+Previous solution calculated unique rays in a space.  What if
+the solution just calculates the deltas from the origin, since
+the comparison is only with a single origin each time.
+
+It should be mostly the same.  Just removes a bit of math.
+
+|#
+
+(define (delta-normed p0 p1)
   (match-define (posn x0 y0) p0)
   (match-define (posn x1 y1) p1)
-  (define dx (- x0 x1))
-  (define dy (- y0 y1))
-  ;; normalize the vector so the coefficients are the same
-  ;; for colinear points.  This simplifies to smallest integers
-  ;; not the unit vector which keeps the coefficients exact and they
-  ;; can be hashed
-  (define-values (ndx ndy)
-    (let ([m (gcd dx dy)])
-      (values (if (zero? dx) 0 (/ m dx))
-              (if (zero? dy) 0 (/ m dy)))))
-  (if (zero? dx)
-      (list ndy 0 0)
-      (list ndy (- ndx) (* ndx (- y0 (* (/ ndy ndx) x0))))))
-
+  (define dx (- x1 x0))
+  (define dy (- y1 y0))
+  (define m (gcd dx dy))
+  (list (/ dx m) (/ dy m)))
 
 (module+ test
-  (check-equal? (line-coefficients (posn 3 3) (posn 2 2))
-                (line-coefficients (posn 3 3) (posn 1 1)))
-  (check-not-equal? (line-coefficients (posn 3 3) (posn 2 2))
-                    (line-coefficients (posn 3 3) (posn 2 1)))
+  (check-equal? (delta-normed (posn 3 3) (posn 2 2))
+                (delta-normed (posn 3 3) (posn 1 1)))
+  (check-not-equal? (delta-normed (posn 3 3) (posn 2 2))
+                    (delta-normed (posn 3 3) (posn 2 1)))
 
-  (check-equal? (line-coefficients (posn 0 0) (posn 3 2))
-                (line-coefficients (posn 0 0) (posn 6 4)))
+  (check-equal? (delta-normed (posn 0 0) (posn 3 2))
+                (delta-normed (posn 0 0) (posn 6 4)))
 
-  (check-equal? (line-coefficients (posn 0 0) (posn 0 1))
-                (line-coefficients (posn 0 0) (posn 0 2)))
+  (check-equal? (delta-normed (posn 0 0) (posn 0 1))
+                (delta-normed (posn 0 0) (posn 0 2)))
 
-  (check-equal? (line-coefficients (posn 0 0) (posn 1 0))
-                (line-coefficients (posn 0 0) (posn 2 0)))
+  (check-equal? (delta-normed (posn 0 0) (posn 1 0))
+                (delta-normed (posn 0 0) (posn 2 0)))
 
-  (check-not-equal? (line-coefficients (posn 5 5) (posn 10 10))
-                    (line-coefficients (posn 5 5) (posn 1 1))))
+  (check-not-equal? (delta-normed (posn 5 5) (posn 10 10))
+                    (delta-normed (posn 5 5) (posn 1 1))))
 
 
 (define (solve-part-one asteroids)
@@ -71,7 +70,7 @@ b = y - dy / dx * x
       (set-count
        (for/set ([dest   (in-list asteroids)]
                  #:unless (equal? origin dest))
-         (line-coefficients origin dest))))
+         (delta-normed origin dest))))
     (if m (max m visible) visible)))
 
 (module+ test
@@ -123,7 +122,6 @@ MAP
                  (call-with-input-string asteroid-map read-asteroid-map))
                 (list->set asteroids))
 
-
   (check-equal?
    (call-with-input-file "test-inputs/10_1_01.txt"
      (lambda (in)
@@ -134,9 +132,7 @@ MAP
    (call-with-input-file "test-inputs/10_1_02.txt"
      (lambda (in)
        (solve-part-one (read-asteroid-map in))))
-   41)
-
-  )
+   35))
 
 
 (module* part-one #f
