@@ -1,24 +1,17 @@
 #lang racket/base
 
-#|
-
-dy/dx * x + b = y
-dy * x + dx * b = dx * y
-
-dx * b = dx * y - dy * x
--dx * b = dy * x - dx * y
-0 = dy * x - dx * y + dx * b
-
-dx * b = dx * y - dy * x
-b = (dx * y - dy * x) / dx
-b = y - dy / dx * x
-
-|#
-
 (require racket/generator
          racket/match
+         racket/math
          racket/sequence
-         racket/set)
+         racket/set
+
+         rebellion/base/comparator
+         rebellion/base/option
+         rebellion/collection/entry
+         rebellion/collection/list
+         rebellion/streaming/reducer
+         rebellion/streaming/transducer)
 
 (module+ test
   (require racket/port
@@ -119,7 +112,8 @@ MAP
     )
 
   (check-equal? (list->set
-                 (call-with-input-string asteroid-map read-asteroid-map))
+                 (call-with-input-string
+                  asteroid-map read-asteroid-map))
                 (list->set asteroids))
 
   (check-equal?
@@ -139,3 +133,60 @@ MAP
   (call-with-input-file "inputs/10.txt"
     (lambda (in)
       (solve-part-one (read-asteroid-map in)))))
+
+(define (find-asteroid-base asteroids)
+  (for/fold ([m #f] [asteroid #f] #:result asteroid)
+            ([origin (in-list asteroids)])
+    (define visible
+      (set-count
+       (for/set ([dest   (in-list asteroids)]
+                 #:unless (equal? origin dest))
+         (delta-normed origin dest))))
+    (cond
+      [(not m)       (values visible origin)]
+      [(< m visible) (values visible origin)]
+      [else          (values m asteroid)])))
+
+(struct relative-asteroid (angle distance position) #:transparent)
+
+(define (calculate-laser-sequence base asteroids)
+  (match-define (posn x0 y0) base)
+  (transduce asteroids
+             (filtering
+              (lambda (a-posn)
+                (not (equal? a-posn base))))
+             (mapping
+              (lambda (a-posn)
+                (match-define (posn x1 y1) a-posn)
+                (define dx (- x1 x0))
+                (define dy (- y1 y0))
+                (define distance (sqrt (+ (* dx dx) (* dy dy))))
+                (match-define (list ndx ndy) (delta-normed base a-posn))
+                (define angle
+                  (let ([r (- (atan (- ndy) ndx) (/ pi 2))])
+                    (if (< r 0) (+ r (* 2 pi)) r)))
+                (relative-asteroid angle distance a-posn)))
+             (bisecting relative-asteroid-angle values)
+             (grouping (into-transduced
+                        (sorting real<=>
+                                 #:key relative-asteroid-distance)
+                        #:into into-list))
+             (append-mapping
+              (lambda (an-entry)
+                (define angle (entry-key an-entry))
+                (match (entry-value an-entry)
+                  [(and (list a) v) v]
+                  [(list a ...)
+                   (for/list ([an-asteroid (in-list a)]
+                              [n (in-naturals)])
+                     (struct-copy relative-asteroid
+                                  an-asteroid
+                                  [angle (+ (* n 2 pi) angle)]))])))
+
+             (sorting real<=> #:key relative-asteroid-angle)
+             #:into
+             #;into-list
+             (reducer-map (into-nth 201)
+                          #:range
+                          (compose1 relative-asteroid-position
+                                    present-value))))
