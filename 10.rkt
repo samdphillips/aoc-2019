@@ -14,7 +14,9 @@
          rebellion/streaming/transducer)
 
 (module+ test
-  (require racket/port
+  (require racket/format
+           racket/port
+           syntax/parse/define
            rackunit))
 
 
@@ -149,6 +151,24 @@ MAP
 
 (struct relative-asteroid (angle distance position) #:transparent)
 
+(define (calculate-angle dx dy)
+  (define tx (* dy -1))
+  (define ty (* dx -1))
+  (define r (atan ty tx))
+  (if (<= r 0)
+      (abs r)
+      (- (* 2 pi) r)))
+
+(module+ test
+  (define-simple-macro (test-angle x y v)
+    (test-equal? (~a "(" x ", " y ")")
+                 (calculate-angle x y) v))
+
+  (test-angle 0 -1 0)
+  (test-angle 1 0 (/ pi 2))
+  (test-angle 0 1 pi)
+  (test-angle -1 0 (+ pi (/ pi 2))))
+
 (define (calculate-laser-sequence base asteroids)
   (match-define (posn x0 y0) base)
   (transduce asteroids
@@ -162,9 +182,7 @@ MAP
                 (define dy (- y1 y0))
                 (define distance (sqrt (+ (* dx dx) (* dy dy))))
                 (match-define (list ndx ndy) (delta-normed base a-posn))
-                (define angle
-                  (let ([r (- (atan (- ndy) ndx) (/ pi 2))])
-                    (if (< r 0) (+ r (* 2 pi)) r)))
+                (define angle (calculate-angle ndx ndy))
                 (relative-asteroid angle distance a-posn)))
              (bisecting relative-asteroid-angle values)
              (grouping (into-transduced
@@ -185,8 +203,66 @@ MAP
 
              (sorting real<=> #:key relative-asteroid-angle)
              #:into
-             #;into-list
-             (reducer-map (into-nth 201)
-                          #:range
-                          (compose1 relative-asteroid-position
-                                    present-value))))
+             into-list))
+
+(module+ test
+  (test-case "small laser sequence"
+    (define base (posn 2 2))
+    (define asteroids
+      (list (posn 1 2) (posn 3 2) (posn 2 1) (posn 2 3)
+            (posn 2 0) (posn 4 2) (posn 2 3) (posn 1 2)))
+    (define asteroid-sequence
+      (map relative-asteroid-position
+           (calculate-laser-sequence base asteroids)))
+    (check-equal? asteroid-sequence
+                  (list (posn 2 1)
+                        (posn 3 2)
+                        (posn 2 3)
+                        (posn 1 2)
+                        (posn 2 0)
+                        (posn 4 2)
+                        (posn 2 3)
+                        (posn 1 2)))))
+
+
+(define (solve-part-two asteroids n)
+  (define base (find-asteroid-base asteroids))
+  (reduce-all (reducer-map (into-nth (sub1 n))
+                           #:range
+                           (compose1 relative-asteroid-position
+                                     present-value))
+              (in-list (calculate-laser-sequence base asteroids))))
+
+(module+ test
+  (let ()
+    (define asteroids
+      (call-with-input-file "test-inputs/10_1_03.txt" read-asteroid-map))
+    (define laser-sequence
+      (calculate-laser-sequence (posn 11 13) asteroids))
+    (define-simple-macro (test-sequence n p)
+      (test-equal? (~a "step " n)
+                   (reduce-all
+                     (reducer-map (into-nth (sub1 n))
+                                  #:range
+                                  (compose1 relative-asteroid-position
+                                            present-value))
+                     laser-sequence)
+                   p))
+
+    (test-sequence   1 (posn 11 12))
+    (test-sequence   2 (posn 12  1))
+    (test-sequence   3 (posn 12  2))
+    (test-sequence  10 (posn 12  8))
+    (test-sequence  20 (posn 16  0))
+    (test-sequence  50 (posn 16  9))
+    (test-sequence 100 (posn 10 16))
+    (test-sequence 199 (posn  9  6))
+    (test-sequence 200 (posn  8  2))
+    (test-sequence 201 (posn 10  9))
+    (test-sequence 299 (posn 11  1))))
+
+(module* part-two #f
+  (require threading)
+  (call-with-input-file "inputs/10.txt"
+    (lambda~> read-asteroid-map
+              (solve-part-two 200))))
